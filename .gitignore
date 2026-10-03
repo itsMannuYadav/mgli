@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.log
+stats.json
+last-user.json
+.version
+exports/*.csv
+Lead-Generator.zip

@@ -1,0 +1,26 @@
+{
+  "name": "my-lead-generator",
+  "version": "1.0.0",
+  "main": "cli.js",
+  "scripts": {
+    "start": "node cli.js",
+    "dev": "node cli.js"
+  },
+  "keywords": [],
+  "author": "Mannu Yadav",
+  "license": "ISC",
+  "description": "Terminal lead generator by Mannu Yadav \u00e2\u20ac\u201d Google Maps scrape (Library, India) to CSV",
+  "dependencies": {
+    "adm-zip": "^0.6.1",
+    "axios": "^1.15.1",
+    "cheerio": "^1.2.0",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.4.2",
+    "playwright": "^1.59.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "bin": {
+    "mgli": "cli.js"
+  }
+}
