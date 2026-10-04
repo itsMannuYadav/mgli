@@ -5,15 +5,40 @@ Everything is driven from the terminal — no Telegram, no bot token.
 
 Built by **Mannu Yadav**.
 
-## One-line install / update (Windows)
+## One-line install / update
 
-Open **PowerShell** and paste this. It installs the extractor if you don't have it, and updates it if you do:
+Paste one line. It installs the extractor if you don't have it, and updates it if you do. It also installs Node.js (asking first) and the browser if they're missing.
+
+**Windows** — open PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/itsMannuYadav/mgli/main/install.ps1 | iex
 ```
 
-It installs Node.js (asks first) if missing, downloads the app, installs the browser and creates the `mgli` command. An older copy from a previous zip is upgraded in place and your `.env` and `exports` folder are kept.
+**macOS / Linux** — open Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/itsMannuYadav/mgli/main/install.sh | bash
+```
+
+Both create the `mgli` command. An older copy from a previous zip is upgraded in place and your `.env` and `exports` folder are kept. Then open a **new** terminal and type `mgli`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `mgli` | Start an extraction |
+| `mgli update` | Download and install the latest version |
+| `mgli doctor` | Check this computer is ready (Node, browser, internet) and print the exact fix commands |
+| `mgli version` | Show the installed version |
+| `mgli help` | List all commands |
+
+## Supported systems
+
+- **Windows 10/11, macOS and Linux**, with **Node.js 18 or newer**. The installers set Node.js up for you if it's missing.
+- On **Linux** the browser needs some system libraries. The installer offers to install them (needs `sudo`). If the browser fails to start, run: `sudo env "PATH=$PATH" npx playwright install-deps chromium`
+- If the browser component is missing, `mgli` notices and offers to download it.
+- Not sure what's wrong? Run `mgli doctor`.
 
 ## Quick start (Windows, with the zip)
 

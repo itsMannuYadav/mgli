@@ -1,6 +1,14 @@
 #!/usr/bin/env node
+// Needs Node 18+. Checked first, before loading anything that could fail on an old Node.
+if (Number(process.versions.node.split('.')[0]) < 18) {
+    const fix = { win32: 'winget install OpenJS.NodeJS.LTS', darwin: 'brew install node   (or download from https://nodejs.org)' }[process.platform]
+        || 'install Node.js LTS from https://nodejs.org (or use nvm)';
+    console.error(`\n  Node.js 18 or newer is required (you have ${process.versions.node}).\n  Fix:  ${fix}\n  Then open a NEW terminal and run mgli again.\n`);
+    process.exit(1);
+}
 require('dotenv').config({ path: require('path').join(__dirname, '.env'), quiet: true });
 const readline = require('readline');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -269,6 +277,11 @@ async function main() {
         '',
     ]));
 
+    if (!(await ensureBrowser())) {
+        rl.close();
+        return;
+    }
+
     if (await updateAvailable()) {
         console.log('\n' + box([
             c.yellow(c.bold('🔔 A new version is available')),
@@ -465,7 +478,9 @@ async function main() {
         console.log();
     } catch (err) {
         live.stop();
-        console.log('\n' + box([c.red(c.bold('✖ Something went wrong')), '', err.message], c.red) + '\n');
+        const advice = explainError(err);
+        const first = String(err.message || err).split('\n')[0]; // skip Playwright's long call logs
+        console.log('\n' + box([c.red(c.bold('✖ Something went wrong')), '', ...(advice || [first])], c.red) + '\n');
         process.exitCode = 1;
     } finally {
         live.stop();
@@ -489,12 +504,161 @@ async function updateCommand() {
     process.exit();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HELP / VERSION / DOCTOR / BROWSER CHECK
+// ─────────────────────────────────────────────────────────────────────────────
+const OS_NAME = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[process.platform] || process.platform;
+
+function versionInfo() {
+    let v = '1.0.0';
+    try { v = require('./package.json').version; } catch (e) {}
+    let build = '';
+    try { build = fs.readFileSync(path.join(__dirname, '.version'), 'utf8').trim().slice(0, 7); } catch (e) {}
+    return build ? `${v} (${build})` : v;
+}
+
+function helpCommand(exitCode = 0) {
+    const row = (cmd, text) => `  ${c.cyan(cmd.padEnd(16))}${text}`;
+    console.log([
+        '',
+        `  ${c.bold(c.cyan('📚 Lead Generator (mgli)'))} ${c.gray(versionInfo())}`,
+        c.gray(`  Collects ${BUSINESS.toLowerCase()} leads in ${COUNTRY} from Google Maps into CSV files.`),
+        '',
+        c.bold('  Commands'),
+        row('mgli', 'Start an extraction (asks a few quick questions)'),
+        row('mgli update', 'Download and install the latest version'),
+        row('mgli doctor', 'Check this computer is ready (Node, browser, internet)'),
+        row('mgli version', 'Show the installed version'),
+        row('mgli help', 'Show this help'),
+        '',
+        c.bold('  While it runs'),
+        row('Ctrl+C twice', 'Stop early and still save what was found'),
+        row('Next start', 'Offers to resume an unfinished search'),
+        '',
+        c.bold('  Where things are'),
+        row('Your CSV files', path.join(__dirname, 'exports')),
+        row('Install folder', __dirname),
+        '',
+        c.gray('  Install or update on any computer: see the one-line commands in the README'),
+        c.gray('  https://github.com/itsMannuYadav/mgli'),
+        '',
+    ].join('\n'));
+    process.exit(exitCode);
+}
+
+function versionCommand() {
+    console.log(`mgli ${versionInfo()}  (Node ${process.versions.node}, ${OS_NAME} ${process.arch})`);
+    process.exit(0);
+}
+
+function chromiumPath() {
+    try { return require('playwright').chromium.executablePath(); } catch (e) { return ''; }
+}
+function browserInstalled() {
+    const p = chromiumPath();
+    return !!p && fs.existsSync(p);
+}
+
+// Exact commands to fix a missing browser, per operating system.
+function browserFixLines() {
+    const lines = ['npx playwright install chromium'];
+    if (process.platform === 'linux') {
+        lines.push('sudo env "PATH=$PATH" npx playwright install-deps chromium   # Linux system libraries');
+    }
+    return lines;
+}
+
+/** Makes sure the browser is there; offers to download it. Returns false if the run can't continue. */
+async function ensureBrowser() {
+    if (browserInstalled()) return true;
+    console.log('\n' + box([
+        c.yellow(c.bold('The browser component is not installed yet')),
+        '',
+        'One-time download of about 150 MB.',
+    ], c.yellow));
+    const yes = await askYesNo(null, 'Install it now?', 'Runs:  npx playwright install chromium', true);
+    if (yes) {
+        const r = spawnSync('npx playwright install chromium', { cwd: __dirname, stdio: 'inherit', shell: true });
+        if (r.status === 0 && browserInstalled()) return true;
+    }
+    console.log('\n  ' + c.red('✖ The browser is not installed.') + ' Run this, then start mgli again:');
+    for (const l of browserFixLines()) console.log('    ' + c.cyan(l));
+    console.log();
+    return false;
+}
+
+/** Turns a raw failure into plain advice when we recognise the cause. */
+function explainError(err) {
+    const m = String((err && err.message) || err || '');
+    if (/Executable doesn't exist|playwright install/i.test(m)) {
+        return ['The browser component is missing.', ...browserFixLines().map((l) => '  ' + l)];
+    }
+    if (/missing dependencies|shared librar|libnss|libatk|libgbm/i.test(m)) {
+        return ['Your system is missing libraries that the browser needs.', '  sudo env "PATH=$PATH" npx playwright install-deps chromium'];
+    }
+    if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|net::ERR_(INTERNET|NAME|CONNECTION)/i.test(m)) {
+        return ['Could not reach the internet. Check your connection and try again.'];
+    }
+    return null;
+}
+
+async function doctorCommand() {
+    const ok = (t) => `  ${c.green('✔')} ${t}`;
+    const bad = (t) => `  ${c.red('✖')} ${t}`;
+    const warn = (t) => `  ${c.yellow('!')} ${t}`;
+    const fixes = [];
+    console.log(`\n  ${c.bold(c.cyan('mgli doctor'))} ${c.gray(`— checking this computer`)}\n`);
+
+    console.log(ok(`System: ${OS_NAME} ${process.arch}`));
+    console.log(ok(`Version: ${versionInfo()}`));
+    console.log(ok(`Node.js ${process.versions.node}`));
+
+    if (browserInstalled()) console.log(ok('Browser component installed'));
+    else { console.log(bad('Browser component NOT installed')); fixes.push(...browserFixLines()); }
+
+    try {
+        fs.mkdirSync(path.join(__dirname, 'exports'), { recursive: true });
+        fs.accessSync(path.join(__dirname, 'exports'), fs.constants.W_OK);
+        console.log(ok('Exports folder is writable'));
+    } catch (e) { console.log(bad(`Cannot write to ${path.join(__dirname, 'exports')}`)); }
+
+    try {
+        await axios.get('https://www.google.com/maps', { timeout: 8000, validateStatus: () => true });
+        console.log(ok('Can reach Google Maps'));
+    } catch (e) { console.log(bad(`Cannot reach Google Maps (${e.code || e.message})`)); }
+
+    if (await updateAvailable(5000)) { console.log(warn('A newer version is available')); fixes.push('mgli update'); }
+    else console.log(ok('Up to date (or offline)'));
+
+    if (fixes.length) {
+        console.log('\n  ' + c.bold('To fix, run:'));
+        for (const f of fixes) console.log('    ' + c.cyan(f));
+    } else {
+        console.log('\n  ' + c.green(c.bold('All good. Type mgli to start.')));
+    }
+    console.log();
+    process.exit(fixes.some((f) => f !== 'mgli update') ? 1 : 0);
+}
+
 const sub = (process.argv[2] || '').toLowerCase();
 if (['update', '--update', '-u'].includes(sub)) {
     updateCommand();
+} else if (['help', '--help', '-h', '/?', '?'].includes(sub)) {
+    helpCommand();
+} else if (['version', '--version', '-v'].includes(sub)) {
+    versionCommand();
+} else if (sub === 'doctor') {
+    doctorCommand();
+} else if (sub) {
+    console.log(`\n  ${c.red(`Unknown command "${process.argv[2]}".`)}`);
+    helpCommand(1);
 } else {
     main().catch((err) => {
         live.stop();
+        if (err && err.code === 'ERR_USE_AFTER_CLOSE') { // input closed (Ctrl+D, or no terminal attached)
+            console.log('\n  ' + c.gray('Input closed. Goodbye!'));
+            process.exit(0);
+        }
         console.error(err);
         process.exit(1);
     });

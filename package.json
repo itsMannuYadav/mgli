@@ -9,7 +9,7 @@
   "keywords": [],
   "author": "Mannu Yadav",
   "license": "ISC",
-  "description": "Terminal lead generator by Mannu Yadav \u00e2\u20ac\u201d Google Maps scrape (Library, India) to CSV",
+  "description": "Terminal lead generator by Mannu Yadav â€” Google Maps scrape (Library, India) to CSV",
   "dependencies": {
     "adm-zip": "^0.6.1",
     "axios": "^1.15.1",
@@ -22,5 +22,8 @@
   },
   "bin": {
     "mgli": "cli.js"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

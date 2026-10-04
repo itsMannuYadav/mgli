@@ -90,8 +90,8 @@ async function runUpdate(log = console.log) {
         if (depsBefore !== depsAfter) {
             log('Dependencies changed — installing packages (this can take a minute)…');
             const opts = { cwd: ROOT, stdio: 'inherit', shell: true };
-            if (spawnSync('npm', ['install'], opts).status !== 0) throw new Error('npm install failed');
-            spawnSync('npx', ['playwright', 'install', 'chromium'], opts);
+            if (spawnSync('npm install', opts).status !== 0) throw new Error('npm install failed');
+            spawnSync('npx playwright install chromium', opts);
         }
         if (remote) fs.writeFileSync(VERSION_FILE, remote);
     } finally {
