@@ -84,10 +84,22 @@ const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, '');
 const visLen = (s) => stripAnsi(s).length;
 const WIDTH = Math.min(Math.max((process.stdout.columns || 80) - 2, 50), 68);
 
+// Shortens a line to fit; a long line would otherwise push the box's right edge out of place.
+function clip(line, max) {
+    if (visLen(line) <= max) return line;
+    return stripAnsi(line).slice(0, Math.max(0, max - 1)) + '…';
+}
+
+// For paths, keep the end (the useful part) and cut the start.
+function shortPath(p, max) {
+    return p.length <= max ? p : '…' + p.slice(p.length - (max - 1));
+}
+
 function box(lines, color = c.cyan) {
     const inner = WIDTH - 2;
     const out = [color('╭' + '─'.repeat(inner) + '╮')];
-    for (const l of lines) {
+    for (const raw of lines) {
+        const l = clip(raw, inner - 2);
         const pad = Math.max(0, inner - 2 - visLen(l));
         out.push(color('│') + ' ' + l + ' '.repeat(pad) + ' ' + color('│'));
     }
@@ -518,36 +530,51 @@ function versionInfo() {
 }
 
 function helpCommand(exitCode = 0) {
-    const row = (cmd, text) => `  ${c.cyan(cmd.padEnd(16))}${text}`;
-    console.log([
+    const inner = WIDTH - 4; // usable characters per box line
+    const row = (cmd, text) => `${c.cyan(cmd.padEnd(14))}${text}`;
+    console.log('\n' + box([
         '',
-        `  ${c.bold(c.cyan('📚 Lead Generator (mgli)'))} ${c.gray(versionInfo())}`,
-        c.gray(`  Collects ${BUSINESS.toLowerCase()} leads in ${COUNTRY} from Google Maps into CSV files.`),
+        center(c.bold(c.cyan('LEAD GENERATOR  ·  mgli'))),
+        center(c.gray(`${BUSINESS} leads in ${COUNTRY}  →  CSV`)),
+        center(c.dim(`version ${versionInfo()}`)),
         '',
-        c.bold('  Commands'),
-        row('mgli', 'Start an extraction (asks a few quick questions)'),
-        row('mgli update', 'Download and install the latest version'),
-        row('mgli doctor', 'Check this computer is ready (Node, browser, internet)'),
+    ]));
+    console.log(box([
+        c.bold('Commands'),
+        '',
+        row('mgli', 'Start an extraction'),
+        row('mgli update', 'Install the latest version'),
+        row('mgli doctor', 'Check this computer is ready'),
         row('mgli version', 'Show the installed version'),
         row('mgli help', 'Show this help'),
+    ], c.blue));
+    console.log(box([
+        c.bold('While it runs'),
         '',
-        c.bold('  While it runs'),
-        row('Ctrl+C twice', 'Stop early and still save what was found'),
-        row('Next start', 'Offers to resume an unfinished search'),
+        row('Ctrl+C twice', 'Stop early, keep results'),
+        row('Next start', 'Resume an unfinished run'),
+    ], c.blue));
+    console.log(box([
+        c.bold('Where things are'),
         '',
-        c.bold('  Where things are'),
-        row('Your CSV files', path.join(__dirname, 'exports')),
-        row('Install folder', __dirname),
-        '',
-        c.gray('  Install or update on any computer: see the one-line commands in the README'),
-        c.gray('  https://github.com/itsMannuYadav/mgli'),
-        '',
-    ].join('\n'));
+        c.gray('Your CSV files'),
+        c.cyan(shortPath(path.join(__dirname, 'exports'), inner)),
+        c.gray('Install folder'),
+        c.cyan(shortPath(__dirname, inner)),
+    ], c.blue));
+    console.log('\n  ' + c.gray('Install / update on any computer: github.com/itsMannuYadav/mgli') + '\n');
     process.exit(exitCode);
 }
 
 function versionCommand() {
-    console.log(`mgli ${versionInfo()}  (Node ${process.versions.node}, ${OS_NAME} ${process.arch})`);
+    const kv2 = (k, v) => `${c.gray(k.padEnd(10))}${v}`;
+    console.log('\n' + box([
+        c.bold(c.cyan('Lead Generator (mgli)')),
+        '',
+        kv2('Version', versionInfo()),
+        kv2('Node.js', process.versions.node),
+        kv2('System', `${OS_NAME} ${process.arch}`),
+    ]) + '\n');
     process.exit(0);
 }
 
@@ -603,41 +630,56 @@ function explainError(err) {
 }
 
 async function doctorCommand() {
-    const ok = (t) => `  ${c.green('✔')} ${t}`;
-    const bad = (t) => `  ${c.red('✖')} ${t}`;
-    const warn = (t) => `  ${c.yellow('!')} ${t}`;
+    const rows = [];
+    let problems = 0;
+    let notes = 0;
+    const add = (level, label, value) => {
+        const icon = level === 'ok' ? c.green('✔') : level === 'warn' ? c.yellow('!') : c.red('✖');
+        if (level === 'bad') problems++;
+        if (level === 'warn') notes++;
+        rows.push(`${icon} ${c.gray(label.padEnd(10))} ${value}`);
+    };
     const fixes = [];
-    console.log(`\n  ${c.bold(c.cyan('mgli doctor'))} ${c.gray(`— checking this computer`)}\n`);
 
-    console.log(ok(`System: ${OS_NAME} ${process.arch}`));
-    console.log(ok(`Version: ${versionInfo()}`));
-    console.log(ok(`Node.js ${process.versions.node}`));
+    live.start();
+    live.set('Checking this computer…');
 
-    if (browserInstalled()) console.log(ok('Browser component installed'));
-    else { console.log(bad('Browser component NOT installed')); fixes.push(...browserFixLines()); }
+    add('ok', 'System', `${OS_NAME} ${process.arch}`);
+    add('ok', 'Version', versionInfo());
+    add('ok', 'Node.js', process.versions.node);
+
+    if (browserInstalled()) add('ok', 'Browser', 'Installed');
+    else { add('bad', 'Browser', c.red('Not installed')); fixes.push(...browserFixLines()); }
 
     try {
         fs.mkdirSync(path.join(__dirname, 'exports'), { recursive: true });
         fs.accessSync(path.join(__dirname, 'exports'), fs.constants.W_OK);
-        console.log(ok('Exports folder is writable'));
-    } catch (e) { console.log(bad(`Cannot write to ${path.join(__dirname, 'exports')}`)); }
+        add('ok', 'Exports', 'Folder is writable');
+    } catch (e) { add('bad', 'Exports', c.red('Cannot write to the folder')); }
 
     try {
         await axios.get('https://www.google.com/maps', { timeout: 8000, validateStatus: () => true });
-        console.log(ok('Can reach Google Maps'));
-    } catch (e) { console.log(bad(`Cannot reach Google Maps (${e.code || e.message})`)); }
+        add('ok', 'Internet', 'Google Maps reachable');
+    } catch (e) { add('bad', 'Internet', c.red(`Cannot reach Google Maps (${e.code || 'error'})`)); }
 
-    if (await updateAvailable(5000)) { console.log(warn('A newer version is available')); fixes.push('mgli update'); }
-    else console.log(ok('Up to date (or offline)'));
+    if (await updateAvailable(5000)) { add('warn', 'Updates', c.yellow('New version available')); fixes.push('mgli update'); }
+    else add('ok', 'Updates', 'Up to date');
 
+    live.stop();
+
+    const color = problems ? c.red : notes ? c.yellow : c.green;
+    const headline = problems ? c.red(c.bold('Needs attention'))
+        : notes ? c.yellow(c.bold('Ready, with a note'))
+        : c.green(c.bold('All good. Type  mgli  to start.'));
+    console.log('\n' + box([c.bold('mgli doctor'), '', ...rows, '', headline], color));
+
+    // Commands go outside the box so they can be copied whole, whatever the window width.
     if (fixes.length) {
         console.log('\n  ' + c.bold('To fix, run:'));
         for (const f of fixes) console.log('    ' + c.cyan(f));
-    } else {
-        console.log('\n  ' + c.green(c.bold('All good. Type mgli to start.')));
     }
     console.log();
-    process.exit(fixes.some((f) => f !== 'mgli update') ? 1 : 0);
+    process.exit(problems ? 1 : 0);
 }
 
 const sub = (process.argv[2] || '').toLowerCase();
@@ -650,7 +692,7 @@ if (['update', '--update', '-u'].includes(sub)) {
 } else if (sub === 'doctor') {
     doctorCommand();
 } else if (sub) {
-    console.log(`\n  ${c.red(`Unknown command "${process.argv[2]}".`)}`);
+    console.log('\n' + box([c.red(c.bold(`Unknown command "${process.argv[2]}"`)), '', 'Here is what you can use:'], c.red));
     helpCommand(1);
 } else {
     main().catch((err) => {
