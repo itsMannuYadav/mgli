@@ -58,8 +58,10 @@ if (-not $dir) { $dir = Join-Path $env:USERPROFILE 'mgli' }
 
 # Native commands are run through cmd so that harmless npm warnings (stderr) can't stop the script.
 function Run($commandLine) {
-    cmd /c "$commandLine 2>&1" | Out-Host
-    return $LASTEXITCODE
+    # Started as its own process on the same console: PowerShell does not re-decode its output (that garbled the
+    # box characters), colors are kept, and npm warnings on stderr cannot stop this script.
+    $p = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $commandLine -NoNewWindow -Wait -PassThru
+    return $p.ExitCode
 }
 
 $hasApp     = Test-Path (Join-Path $dir 'cli.js')
@@ -120,6 +122,8 @@ if (-not $env:MGLI_NO_LINK) {
 
 Write-Host ''
 Say 'All set!' 'Green'
-Say 'Open a NEW terminal and type:  mgli          to start' 'White'
-Say '                                 mgli update   to update later' 'White'
+Say 'Open a NEW terminal and type:' 'White'
+Say '    mgli           to start' 'White'
+Say '    mgli update    to update later' 'White'
+Say '    mgli help      to see all commands' 'White'
 Write-Host ''

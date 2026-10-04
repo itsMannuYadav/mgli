@@ -9,7 +9,7 @@ Built by **Mannu Yadav**.
 
 Paste one line. It installs the extractor if you don't have it, and updates it if you do. It also installs Node.js (asking first) and the browser if they're missing.
 
-**Windows** — open PowerShell:
+**Windows** — open PowerShell (use this line on Windows; the `curl` line below is only for Mac/Linux and will not work in PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/itsMannuYadav/mgli/main/install.ps1 | iex
