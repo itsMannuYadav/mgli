@@ -17,6 +17,27 @@ const COUNTRY = 'India';
 const EXPORTS_DIR = path.join(__dirname, 'exports');
 const STATS_FILE = path.join(__dirname, 'stats.json');
 const USER_FILE = path.join(__dirname, 'last-user.json');
+const PROGRESS_FILE = path.join(__dirname, 'progress.json');
+const DISCARDED_FILE = path.join(__dirname, 'progress.discarded.json');
+
+// Progress of the current run, saved as it goes so a crash or accidental stop doesn't lose the work.
+function saveProgress(state) {
+    try {
+        const tmp = PROGRESS_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify({ ...state, savedAt: Date.now() }));
+        fs.renameSync(tmp, PROGRESS_FILE);
+    } catch (e) {}
+}
+function loadProgress() {
+    try {
+        const p = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+        return p && p.city && Array.isArray(p.leads) ? p : null;
+    } catch (e) { return null; }
+}
+function clearProgress() { try { fs.unlinkSync(PROGRESS_FILE); } catch (e) {} }
+function discardProgress() {
+    try { fs.renameSync(PROGRESS_FILE, DISCARDED_FILE); } catch (e) {}
+}
 
 const CSV_HEADER = [
     { id: 'name',         title: 'Business Name' },
@@ -265,15 +286,37 @@ async function main() {
     saveLastUser(who);
     console.log(`\n  ${c.green('👋')} Welcome, ${c.bold(firstName())}! Let's find some leads.`);
 
-    const city = titleCase(await askRequired(1, 'Which city?', 'e.g. Lucknow, Gorakhpur, New Delhi'));
-    const areasRaw = await ask(2, 'Specific areas?  (optional)', 'Comma-separated for deeper coverage, or press Enter to skip.\n  e.g. Hazratganj, Gomti Nagar, Aliganj');
-    const areas = areasRaw.split(',').map((a) => a.trim()).filter(Boolean);
-    const limit = await askLimit(3);
-    const huntEmails = await askYesNo(4, 'Hunt emails & social links?', 'Visits each business website. Slower, but finds more contacts.', true);
-    const phoneRequired = await askYesNo(5, 'Phone number required?', 'Drops leads that have no phone number.', false);
-    const emailRequired = huntEmails
-        ? await askYesNo(6, 'Email required?', 'Drops leads where no email was found.', false)
-        : false;
+    // ── Unfinished run from last time? Offer to continue it ──
+    let saved = loadProgress();
+    let resumeRun = false;
+    if (saved) {
+        const ago = formatDuration(Date.now() - (saved.savedAt || Date.now()));
+        console.log('\n' + box([
+            c.yellow(c.bold('⏯  Unfinished search found')),
+            '',
+            kv('Search', `${c.bold(BUSINESS)} in ${c.bold(saved.city)}, ${COUNTRY}`),
+            kv('Saved so far', `${c.bold(String((saved.leads || []).length))} leads`),
+            kv('Saved', `${ago} ago`),
+        ], c.yellow));
+        resumeRun = await askYesNo(null, 'Resume it?', 'Yes = carry on where it stopped. No = start a new search (the old progress is kept in progress.discarded.json).', true);
+        if (!resumeRun) { discardProgress(); saved = null; }
+    }
+
+    let city, areas, limit, huntEmails, phoneRequired, emailRequired;
+    if (resumeRun) {
+        ({ city, areas, huntEmails, phoneRequired, emailRequired } = saved);
+        limit = saved.limit === 'all' ? Infinity : saved.limit;
+    } else {
+        city = titleCase(await askRequired(1, 'Which city?', 'e.g. Lucknow, Gorakhpur, New Delhi'));
+        const areasRaw = await ask(2, 'Specific areas?  (optional)', 'Comma-separated for deeper coverage, or press Enter to skip.\n  e.g. Hazratganj, Gomti Nagar, Aliganj');
+        areas = areasRaw.split(',').map((a) => a.trim()).filter(Boolean);
+        limit = await askLimit(3);
+        huntEmails = await askYesNo(4, 'Hunt emails & social links?', 'Visits each business website. Slower, but finds more contacts.', true);
+        phoneRequired = await askYesNo(5, 'Phone number required?', 'Drops leads that have no phone number.', false);
+        emailRequired = huntEmails
+            ? await askYesNo(6, 'Email required?', 'Drops leads where no email was found.', false)
+            : false;
+    }
 
     const on = (b) => (b ? c.green('✔ yes') : c.gray('✘ no'));
     console.log('\n' + box([
@@ -288,7 +331,7 @@ async function main() {
         kv('Email only', on(emailRequired)),
     ], c.blue));
 
-    if (!(await askYesNo(null, 'Start extraction?', 'Tip: press Ctrl+C once while running to stop early and still save results.', true))) {
+    if (!resumeRun && !(await askYesNo(null, 'Start extraction?', 'Tip: press Ctrl+C twice while running to stop early and still save results.', true))) {
         console.log('\n  ' + c.gray('Cancelled. Nothing was run.\n'));
         rl.close();
         return;
@@ -298,11 +341,18 @@ async function main() {
 
     // ── Run ──────────────────────────────────────────────────────────────────
     let stopRequested = false;
+    let stopArmedAt = 0;
     process.on('SIGINT', () => {
         if (stopRequested) {
             live.stop();
             console.log('\n  ' + c.red('Force quitting.'));
             process.exit(1);
+        }
+        // First press only asks for confirmation, so copying text with Ctrl+C can't stop a long run by accident.
+        if (Date.now() - stopArmedAt > 5000) {
+            stopArmedAt = Date.now();
+            say(c.yellow('  ⚠ Ctrl+C pressed. Press it again within 5 seconds to stop. Otherwise nothing changes.'));
+            return;
         }
         stopRequested = true;
         say(c.yellow('  ⏹ Stopping after the current step — results so far will be saved. (Ctrl+C again to force quit)'));
@@ -336,8 +386,16 @@ async function main() {
         live.set('Launching browser…');
         await scraper.init();
 
+        const settings = { city, areas, limit: limit === Infinity ? 'all' : limit, huntEmails, phoneRequired, emailRequired };
+        if (resumeRun) say(`${c.green('⏯')} ${c.bold('Resuming')} ${c.gray(`— ${saved.leads.length} leads already saved`)}`);
+
         let leads = await scraper.gridSearch(
-            BUSINESS, city, COUNTRY, progress, areas, limit, () => stopRequested
+            BUSINESS, city, COUNTRY, progress, areas, limit, () => stopRequested,
+            {
+                leads: resumeRun ? saved.leads : [],
+                doneQueries: resumeRun ? saved.doneQueries : [],
+                onCheckpoint: (state) => saveProgress({ ...settings, ...state }),
+            }
         );
 
         if (huntEmails && leads.length && !stopRequested) {
@@ -358,6 +416,7 @@ async function main() {
         live.stop();
 
         if (allLeads.length === 0) {
+            clearProgress();
             console.log('\n' + box([
                 c.yellow(c.bold('No leads found')),
                 '',
@@ -384,6 +443,8 @@ async function main() {
         }
 
         updateStats(allLeads.length);
+        // A finished run needs no resuming. If it was stopped early, keep the progress so it can be continued.
+        if (!stopRequested) clearProgress();
 
         const shown = leads.length ? leads : allLeads;
         const hot = shown.filter((l) => l.verification === 'Unclaimed').length;

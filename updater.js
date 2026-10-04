@@ -12,7 +12,7 @@ const ROOT = __dirname;
 const VERSION_FILE = path.join(ROOT, '.version');
 
 // Never overwritten by an update: each person's own data and installs.
-const PROTECTED = new Set(['.env', 'exports', 'last-user.json', 'stats.json', 'node_modules', '.git', '.version']);
+const PROTECTED = new Set(['.env', 'exports', 'last-user.json', 'progress.json', 'progress.discarded.json', 'stats.json', 'node_modules', '.git', '.version']);
 // Repo files that are not needed on team machines.
 const SKIP = new Set(['LoGo_Bot_Icon.png', '.gitignore']);
 

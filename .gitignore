@@ -6,3 +6,6 @@ last-user.json
 .version
 exports/*.csv
 Lead-Generator.zip
+progress.json
+progress.discarded.json
+progress.json.tmp

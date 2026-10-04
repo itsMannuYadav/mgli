@@ -18,6 +18,12 @@ function randomUA() {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+// Stable Google place id (e.g. 0x399...:0x305...) found in both result links and place URLs.
+function placeId(url) {
+    const m = String(url || '').match(/0x[0-9a-f]+:0x[0-9a-f]+/i);
+    return m ? m[0].toLowerCase() : null;
+}
+
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -187,7 +193,9 @@ class GoogleMapsScraper {
         });
 
         // Remove duplicates and apply limit
-        const uniqueLinks = [...new Set(links)].slice(0, maxLeads);
+        // Skip places already collected (earlier searches in this run, or a resumed run) - saves a page load each.
+        const known = this.knownPlaceIds || new Set();
+        const uniqueLinks = [...new Set(links)].filter((l) => !known.has(placeId(l))).slice(0, maxLeads);
 
         for (let i = 0; i < uniqueLinks.length; i++) {
             if (checkStop() || results.length >= maxLeads) break;
@@ -393,6 +401,7 @@ class GoogleMapsScraper {
                     data.state = stateMatch || '';
 
                     results.push(data);
+                    if (this.onLead) this.onLead(data);
                     succeeded = true;
                 } else {
                     console.warn(`[Scraper] ⚠️ Skipped lead ${i + 1} — name was empty. URL: ${uniqueLinks[i].substring(0, 80)}`);
@@ -481,8 +490,9 @@ class GoogleMapsScraper {
     /**
      * Grid Search: Extract leads with an optional limit and stop signal.
      */
-    async gridSearch(businessType, city, country, progressCallback, areaList = [], maxLeads = Infinity, checkStop = () => false) {
+    async gridSearch(businessType, city, country, progressCallback, areaList = [], maxLeads = Infinity, checkStop = () => false, resume = {}) {
         const allLeads = new Map(); // key: name+phone -> lead (for dedup)
+        const doneQueries = new Set(resume.doneQueries || []);
 
         const addLeads = (leads) => {
             for (const lead of leads) {
@@ -494,6 +504,28 @@ class GoogleMapsScraper {
             }
         };
 
+        // Progress saving: lets the caller persist work so a crash or accidental stop loses almost nothing.
+        let sinceCheckpoint = 0;
+        const checkpoint = () => {
+            sinceCheckpoint = 0;
+            if (resume.onCheckpoint) {
+                try { resume.onCheckpoint({ leads: Array.from(allLeads.values()), doneQueries: [...doneQueries] }); } catch (e) {}
+            }
+        };
+
+        addLeads(resume.leads || []);
+        this.knownPlaceIds = new Set();
+        for (const lead of allLeads.values()) {
+            const id = placeId(lead.mapsUrl);
+            if (id) this.knownPlaceIds.add(id);
+        }
+        this.onLead = (lead) => {
+            addLeads([lead]);
+            const id = placeId(lead.mapsUrl);
+            if (id) this.knownPlaceIds.add(id);
+            if (++sinceCheckpoint >= 3) checkpoint();
+        };
+
         // Phase Runner: Processes a group of queries and reports them as distinct sub-phases
         const runPhase = async (phaseNumber, phaseTitle, queries) => {
             const letters = 'abcdefghijklmnopqrstuvwxyz';
@@ -501,6 +533,7 @@ class GoogleMapsScraper {
                 if (checkStop() || allLeads.size >= maxLeads) break;
                 
                 const query = queries[i];
+                if (doneQueries.has(query)) continue; // finished in an earlier (resumed) run
                 // Use 1, 2(a), 2(b) etc. style as requested
                 const phaseLabel = queries.length > 1 ? `${phaseNumber}(${letters[i]})` : `${phaseNumber}`;
                 const phaseName = `${phaseLabel}. ${phaseTitle}${queries.length > 1 ? ` (${directions[i] || i+1})` : ''}`;
@@ -523,6 +556,8 @@ class GoogleMapsScraper {
                 }, remaining, checkStop);
                 
                 addLeads(leads);
+                if (!checkStop()) doneQueries.add(query); // only fully finished queries are skipped on resume
+                checkpoint();
                 await randomDelay(2000, 4000);
             }
         };
@@ -539,6 +574,8 @@ class GoogleMapsScraper {
             await runPhase(3, '📌 Neighborhood', areaQueries);
         }
 
+        this.onLead = null;
+        checkpoint();
         if (progressCallback) progressCallback({ status: 'complete', phase: '🏁 Search Finished', totalUnique: allLeads.size });
         return Array.from(allLeads.values());
     }

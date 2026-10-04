@@ -53,7 +53,13 @@ You'll be asked:
 
 Business type (**Library**) and country (**India**) are fixed — edit `BUSINESS` / `COUNTRY` at the top of `cli.js` to change them.
 
-Press **Ctrl+C once** to stop early and still save what has been found.
+## Stopping and resuming
+
+- Progress is saved to disk as the search runs, so a crash, a closed window or a power cut doesn't lose your leads.
+- Next time you start `mgli`, it offers **"Resume it?"**: press Enter to carry on where it stopped.
+- To stop on purpose, press **Ctrl+C twice** (the first press only asks you to confirm, so copying text can't stop a long run by accident). Your results so far are saved to a CSV.
+- Tip: in Windows Terminal, copy selected text with **Ctrl+Shift+C**.
+
 
 ## Output
 
