@@ -5,7 +5,17 @@ Everything is driven from the terminal — no Telegram, no bot token.
 
 Built by **Mannu Yadav**.
 
-## Quick start (Windows)
+## One-line install / update (Windows)
+
+Open **PowerShell** and paste this. It installs the extractor if you don't have it, and updates it if you do:
+
+```powershell
+irm https://raw.githubusercontent.com/itsMannuYadav/mgli/main/install.ps1 | iex
+```
+
+It installs Node.js (asks first) if missing, downloads the app, installs the browser and creates the `mgli` command. An older copy from a previous zip is upgraded in place and your `.env` and `exports` folder are kept.
+
+## Quick start (Windows, with the zip)
 
 1. Install [Node.js LTS](https://nodejs.org) (one time).
 2. Unzip this folder anywhere.
