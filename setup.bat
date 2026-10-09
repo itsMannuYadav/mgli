@@ -15,11 +15,15 @@ call npx playwright install chromium
 if errorlevel 1 goto fail
 echo Creating the mgli command...
 call npm link
+if errorlevel 1 (
+  echo.
+  echo WARNING: could not create the mgli command. You can still use run.bat and update.bat in this folder.
+)
 echo.
 echo Setup complete!
 echo   - Open a NEW terminal and type  mgli  to start
 echo   - Type  mgli update  any time to get the latest version
-echo   - (or just double-click run.bat)
+echo   - (or just double-click run.bat, and update.bat to update)
 pause
 exit /b 0
 :fail

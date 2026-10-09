@@ -61,7 +61,7 @@ mgli update
 
 That's it — no need to download a new zip. It downloads the newest code and installs it, and your own files are never touched (`exports/`, your saved name, `.env`). If you're already up to date it says so. You'll also see a yellow "new version available" box when you start `mgli`.
 
-Needs an internet connection. If the `mgli` command isn't found, run `setup.bat` once more, then open a **new** terminal.
+Needs an internet connection. If the `mgli` command isn't found, run `setup.bat` once more, then open a **new** terminal. Or skip the command entirely: double-click **`update.bat`** in the install folder.
 
 ## Setup (manual)
 
@@ -110,6 +110,7 @@ Set `USE_FREE_PROXIES=true` in `.env` to rotate free public proxies (see `.env.e
 ```
 setup.bat    ← one-time install
 run.bat      ← double-click to start
+update.bat   ← double-click to update (works without the mgli command)
 updater.js   ← powers `mgli update`
 cli.js       ← terminal prompts + export
 scraper.js   ← Google Maps engine (stealth, grid search, enrichment)

@@ -298,6 +298,7 @@ async function main() {
         console.log('\n' + box([
             c.yellow(c.bold('🔔 A new version is available')),
             `Close this and run  ${c.bold(c.cyan('mgli update'))}  to get it.`,
+            c.gray('No "mgli" command? Double-click update.bat in this folder instead.'),
         ], c.yellow));
     }
 
