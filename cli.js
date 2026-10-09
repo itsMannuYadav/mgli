@@ -484,7 +484,9 @@ async function main() {
             kv('Time taken', formatDuration(Date.now() - startedAt)),
         );
         console.log('\n' + box(lines, c.green));
-        console.log('\n  ' + c.gray('Saved in the exports folder:'));
+        console.log('\n  ' + c.gray('Saved in this folder:'));
+        console.log('  ' + c.cyan(path.dirname(filteredPath)));
+        console.log('\n  ' + c.gray('Files:'));
         console.log('  ' + c.cyan(path.basename(filteredPath)));
         if (filteredOut > 0) console.log('  ' + c.cyan(path.basename(rawPath)));
         console.log();
