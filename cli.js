@@ -317,25 +317,41 @@ async function main() {
     let resumeRun = false;
     if (saved) {
         const ago = formatDuration(Date.now() - (saved.savedAt || Date.now()));
-        console.log('\n' + box([
+        const savedQueue = saved.queue && saved.queue.length ? saved.queue : [saved.city];
+        const savedDone = (saved.completed || []).length;
+        const box1 = [
             c.yellow(c.bold('⏯  Unfinished search found')),
             '',
-            kv('Search', `${c.bold(BUSINESS)} in ${c.bold(saved.city)}, ${COUNTRY}`),
-            kv('Saved so far', `${c.bold(String((saved.leads || []).length))} leads`),
+            kv('Search', `${c.bold(BUSINESS)} in ${c.bold(savedQueue.join(', '))}, ${COUNTRY}`),
+        ];
+        if (savedQueue.length > 1) box1.push(kv('Cities done', `${c.bold(`${savedDone}/${savedQueue.length}`)}  ${c.gray(`(now: ${saved.city})`)}`));
+        box1.push(
+            kv('Saved so far', `${c.bold(String((saved.leads || []).length))} leads ${savedQueue.length > 1 ? c.gray('in the current city') : ''}`),
             kv('Saved', `${ago} ago`),
-        ], c.yellow));
+        );
+        console.log('\n' + box(box1, c.yellow));
         resumeRun = await askYesNo(null, 'Resume it?', 'Yes = carry on where it stopped. No = start a new search (the old progress is kept in progress.discarded.json).', true);
         if (!resumeRun) { discardProgress(); saved = null; }
     }
 
-    let city, areas, limit, huntEmails, phoneRequired, emailRequired;
+    let cities, areas, limit, huntEmails, phoneRequired, emailRequired;
+    let completed = []; // per-city results already finished (kept across a resume)
     if (resumeRun) {
-        ({ city, areas, huntEmails, phoneRequired, emailRequired } = saved);
+        ({ areas, huntEmails, phoneRequired, emailRequired } = saved);
+        cities = saved.queue && saved.queue.length ? saved.queue : [saved.city];
+        completed = saved.completed || [];
         limit = saved.limit === 'all' ? Infinity : saved.limit;
     } else {
-        city = titleCase(await askRequired(1, 'Which city?', 'e.g. Lucknow, Gorakhpur, New Delhi'));
-        const areasRaw = await ask(2, 'Specific areas?  (optional)', 'Comma-separated for deeper coverage, or press Enter to skip.\n  e.g. Hazratganj, Gomti Nagar, Aliganj');
-        areas = areasRaw.split(',').map((a) => a.trim()).filter(Boolean);
+        const cityRaw = await askRequired(1, 'Which city?', 'One city, or several separated by commas. They run one after another.\n  e.g. Lucknow   or   Lucknow, Gorakhpur, Kanpur');
+        const seen = new Set();
+        cities = cityRaw.split(',').map((x) => titleCase(x.trim())).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+        if (cities.length === 1) {
+            const areasRaw = await ask(2, 'Specific areas?  (optional)', 'Comma-separated for deeper coverage, or press Enter to skip.\n  e.g. Hazratganj, Gomti Nagar, Aliganj');
+            areas = areasRaw.split(',').map((a) => a.trim()).filter(Boolean);
+        } else {
+            areas = [];
+            console.log('\n  ' + c.gray(`[2/${TOTAL_STEPS}] Specific areas skipped: they only apply when searching a single city.`));
+        }
         limit = await askLimit(3);
         huntEmails = await askYesNo(4, 'Hunt emails & social links?', 'Visits each business website. Slower, but finds more contacts.', true);
         phoneRequired = await askYesNo(5, 'Phone number required?', 'Drops leads that have no phone number.', false);
@@ -343,13 +359,14 @@ async function main() {
             ? await askYesNo(6, 'Email required?', 'Drops leads where no email was found.', false)
             : false;
     }
+    const multi = cities.length > 1;
 
     const on = (b) => (b ? c.green('✔ yes') : c.gray('✘ no'));
     console.log('\n' + box([
         c.bold(`${firstName()}, please review your search`),
         '',
         kv('Extracted by', c.bold(who)),
-        kv('Search', `${c.bold(BUSINESS)} in ${c.bold(city)}, ${COUNTRY}`),
+        kv('Search', `${c.bold(BUSINESS)} in ${c.bold(cities.join(' → '))}, ${COUNTRY}`),
         kv('Areas', areas.length ? areas.join(', ') : c.gray('none')),
         kv('Limit', limit === Infinity ? 'All (full grid search)' : String(limit)),
         kv('Hunt emails', on(huntEmails)),
@@ -357,7 +374,9 @@ async function main() {
         kv('Email only', on(emailRequired)),
     ], c.blue));
 
-    if (!resumeRun && !(await askYesNo(null, 'Start extraction?', 'Tip: press Ctrl+C twice while running to stop early and still save results.', true))) {
+    if (!resumeRun && !(await askYesNo(null, 'Start extraction?', multi
+        ? `Cities run one after another, so you can leave it. Keep this computer awake. Ctrl+C twice stops early.`
+        : 'Tip: press Ctrl+C twice while running to stop early and still save results.', true))) {
         console.log('\n  ' + c.gray('Cancelled. Nothing was run.\n'));
         rl.close();
         return;
@@ -386,120 +405,179 @@ async function main() {
 
     quietConsole();
     live.start();
-    const scraper = new GoogleMapsScraper({ proxies: await fetchFreeProxies() });
-    const startedAt = Date.now();
-    let currentPhase = '';
-    let unique = 0;
+    const proxies = await fetchFreeProxies();
+    const settings = { areas, limit: limit === Infinity ? 'all' : limit, huntEmails, phoneRequired, emailRequired };
 
-    const progress = (data) => {
-        if (!data || typeof data === 'string') return;
-        const { phase, query, status, count, current, total, totalUnique } = data;
-        if (typeof totalUnique === 'number') unique = totalUnique;
+    // Cities still to do. On a resume, the city that was in progress goes first.
+    const doneNames = new Set(completed.map((r) => r.city));
+    let order = cities.filter((x) => !doneNames.has(x));
+    if (resumeRun && order.includes(saved.city)) order = [saved.city, ...order.filter((x) => x !== saved.city)];
 
-        if (phase && phase !== currentPhase && status !== 'complete') {
-            currentPhase = phase;
-            say(`${c.cyan('▶')} ${c.bold(phase)}`);
-            if (query) say(c.gray(`    ${query}`));
-        }
-        const found = unique > 0 ? c.gray(`· ${unique} unique so far`) : '';
-        if (status === 'scrolling') live.set(`Loading results  ${c.bold(count || 0)} found ${found}`);
-        else if (status === 'extracting') live.set(`${bar(current, total)}  ${c.bold(`${current}/${total}`)} ${found}`);
-        else if (status === 'complete') say(`${c.green('✔')} ${c.bold('Search finished')} ${c.gray(`— ${totalUnique || 0} unique leads`)}`);
-        else live.set(`Searching  ${found}`);
-    };
+    const persist = (city, state) => saveProgress({ ...settings, city, queue: cities, completed, ...state });
 
-    try {
-        live.set('Launching browser…');
-        await scraper.init();
+    /** Runs one city start to finish with a fresh browser. Returns its result summary. */
+    async function runCity(city, prior) {
+        const scraper = new GoogleMapsScraper({ proxies });
+        const startedAt = Date.now();
+        let currentPhase = '';
+        let unique = 0;
 
-        const settings = { city, areas, limit: limit === Infinity ? 'all' : limit, huntEmails, phoneRequired, emailRequired };
-        if (resumeRun) say(`${c.green('⏯')} ${c.bold('Resuming')} ${c.gray(`— ${saved.leads.length} leads already saved`)}`);
+        const progress = (data) => {
+            if (!data || typeof data === 'string') return;
+            const { phase, query, status, count, current, total, totalUnique } = data;
+            if (typeof totalUnique === 'number') unique = totalUnique;
 
-        let leads = await scraper.gridSearch(
-            BUSINESS, city, COUNTRY, progress, areas, limit, () => stopRequested,
-            {
-                leads: resumeRun ? saved.leads : [],
-                doneQueries: resumeRun ? saved.doneQueries : [],
-                onCheckpoint: (state) => saveProgress({ ...settings, ...state }),
+            if (phase && phase !== currentPhase && status !== 'complete') {
+                currentPhase = phase;
+                say(`${c.cyan('▶')} ${c.bold(phase)}`);
+                if (query) say(c.gray(`    ${query}`));
             }
-        );
+            const found = unique > 0 ? c.gray(`· ${unique} unique so far`) : '';
+            if (status === 'scrolling') live.set(`Loading results  ${c.bold(count || 0)} found ${found}`);
+            else if (status === 'extracting') live.set(`${bar(current, total)}  ${c.bold(`${current}/${total}`)} ${found}`);
+            else if (status === 'complete') say(`${c.green('✔')} ${c.bold('Search finished')} ${c.gray(`— ${totalUnique || 0} unique leads`)}`);
+            else live.set(`Searching  ${found}`);
+        };
 
-        if (huntEmails && leads.length && !stopRequested) {
-            say(`${c.cyan('▶')} ${c.bold('Enriching leads')} ${c.gray('— emails & social links')}`);
-            for (let i = 0; i < leads.length; i++) {
-                if (stopRequested) break;
-                live.set(`${bar(i + 1, leads.length)}  ${c.bold(`${i + 1}/${leads.length}`)}`);
-                leads[i] = await scraper.enrich(leads[i]);
+        try {
+            live.set('Launching browser…');
+            await scraper.init();
+
+            if (prior) say(`${c.green('⏯')} ${c.bold('Resuming')} ${c.gray(`— ${prior.leads.length} leads already saved`)}`);
+
+            let leads = await scraper.gridSearch(
+                BUSINESS, city, COUNTRY, progress, areas, limit, () => stopRequested,
+                {
+                    leads: prior ? prior.leads : [],
+                    doneQueries: prior ? prior.doneQueries : [],
+                    onCheckpoint: (state) => persist(city, state),
+                }
+            );
+
+            if (huntEmails && leads.length && !stopRequested) {
+                say(`${c.cyan('▶')} ${c.bold('Enriching leads')} ${c.gray('— emails & social links')}`);
+                for (let i = 0; i < leads.length; i++) {
+                    if (stopRequested) break;
+                    live.set(`${bar(i + 1, leads.length)}  ${c.bold(`${i + 1}/${leads.length}`)}`);
+                    leads[i] = await scraper.enrich(leads[i]);
+                }
+                say(`${c.green('✔')} ${c.bold('Enrichment done')}`);
             }
-            say(`${c.green('✔')} ${c.bold('Enrichment done')}`);
-        }
 
-        const allLeads = [...leads];
-        if (phoneRequired) leads = leads.filter((l) => l.phone && l.phone.trim());
-        if (emailRequired) leads = leads.filter((l) => l.email && l.email.trim());
-        const filteredOut = allLeads.length - leads.length;
+            const allLeads = [...leads];
+            if (phoneRequired) leads = leads.filter((l) => l.phone && l.phone.trim());
+            if (emailRequired) leads = leads.filter((l) => l.email && l.email.trim());
+            const filteredOut = allLeads.length - leads.length;
 
-        live.stop();
+            live.stop();
 
-        if (allLeads.length === 0) {
-            clearProgress();
-            console.log('\n' + box([
-                c.yellow(c.bold('No leads found')),
+            if (allLeads.length === 0) {
+                console.log('\n' + box([
+                    c.yellow(c.bold(`No leads found in ${city}`)),
+                    '',
+                    multi ? 'Moving on to the next city.' : 'Try a different city, or add specific areas.',
+                ], c.yellow) + '\n');
+                return { city, leads: 0, hot: 0, files: [], stopped: stopRequested };
+            }
+
+            fs.mkdirSync(EXPORTS_DIR, { recursive: true });
+            const d = new Date();
+            const p2 = (n) => String(n).padStart(2, '0');
+            const ts = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}`;
+            const fileSafe = (t) => t.replace(/[^\w\-]+/g, '_').slice(0, 80);
+            const safeTag = `${fileSafe(`${BUSINESS}_${city}`)}_by_${fileSafe(who)}`;
+            const extractedOn = new Date().toISOString().slice(0, 10);
+            for (const l of allLeads) { l.extractedBy = who; l.extractedOn = extractedOn; }
+            const filteredPath = path.join(EXPORTS_DIR, `Targeted_Leads_${safeTag}_${ts}.csv`);
+            const rawPath = path.join(EXPORTS_DIR, `Full_Master_Dataset_${safeTag}_${ts}.csv`);
+
+            await createObjectCsvWriter({ path: filteredPath, header: CSV_HEADER })
+                .writeRecords(leads.length ? leads : allLeads);
+            if (filteredOut > 0) {
+                await createObjectCsvWriter({ path: rawPath, header: CSV_HEADER }).writeRecords(allLeads);
+            }
+
+            updateStats(allLeads.length);
+
+            const shown = leads.length ? leads : allLeads;
+            const hot = shown.filter((l) => l.verification === 'Unclaimed').length;
+            const lines = [
+                c.green(c.bold(stopRequested ? `✔ Stopped early, ${firstName()} — ${city} results saved` : multi ? `✔ ${city} complete` : `✔ Great work, ${firstName()}! Extraction complete`)),
                 '',
-                'Try a different city, or add specific areas.',
-            ], c.yellow) + '\n');
-            return;
+                kv('Leads', c.bold(String(shown.length))),
+            ];
+            if (filteredOut > 0) lines.push(kv('Filtered out', `${filteredOut}  ${c.gray(`(${allLeads.length} found in total)`)}`));
+            lines.push(
+                kv('Hot leads', `${c.bold(String(hot))} ${c.gray('unclaimed businesses')}`),
+                kv('Time taken', formatDuration(Date.now() - startedAt)),
+            );
+            console.log('\n' + box(lines, c.green));
+            console.log('\n  ' + c.gray('Saved in this folder:'));
+            console.log('  ' + c.cyan(path.dirname(filteredPath)));
+            console.log('\n  ' + c.gray('Files:'));
+            console.log('  ' + c.cyan(path.basename(filteredPath)));
+            if (filteredOut > 0) console.log('  ' + c.cyan(path.basename(rawPath)));
+            console.log();
+            return { city, leads: shown.length, hot, files: [path.basename(filteredPath)], stopped: stopRequested };
+        } finally {
+            await scraper.close();
+        }
+    }
+
+    const failed = [];
+    const runStartedAt = Date.now();
+    try {
+        for (let i = 0; i < order.length; i++) {
+            if (stopRequested) break;
+            const city = order[i];
+            const prior = resumeRun && saved.city === city && saved.leads.length ? saved : null;
+            if (multi) {
+                say(`\n${c.cyan('━━')} ${c.bold(`City ${completed.length + 1} of ${cities.length}: ${city}`)}`);
+            }
+            live.start();
+            try {
+                const r = await runCity(city, prior);
+                if (!r.stopped) completed.push(r);
+            } catch (err) {
+                live.stop();
+                const advice = explainError(err);
+                const first = String(err.message || err).split('\n')[0]; // skip Playwright's long call logs
+                console.log('\n' + box([
+                    c.red(c.bold(`✖ ${city} failed`)),
+                    '',
+                    ...(advice || [first]),
+                    ...(multi && i < order.length - 1 ? ['', 'Moving on to the next city.'] : []),
+                ], c.red) + '\n');
+                failed.push({ city, reason: first });
+                process.exitCode = 1;
+            }
+            // Point the saved progress at the next city so a resume continues from there.
+            if (!stopRequested && i < order.length - 1) persist(order[i + 1], { leads: [], doneQueries: [] });
         }
 
-        fs.mkdirSync(EXPORTS_DIR, { recursive: true });
-        const d = new Date();
-        const p2 = (n) => String(n).padStart(2, '0');
-        const ts = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}`;
-        const fileSafe = (t) => t.replace(/[^\w\-]+/g, '_').slice(0, 80);
-        const safeTag = `${fileSafe(`${BUSINESS}_${city}`)}_by_${fileSafe(who)}`;
-        const extractedOn = new Date().toISOString().slice(0, 10);
-        for (const l of allLeads) { l.extractedBy = who; l.extractedOn = extractedOn; }
-        const filteredPath = path.join(EXPORTS_DIR, `Targeted_Leads_${safeTag}_${ts}.csv`);
-        const rawPath = path.join(EXPORTS_DIR, `Full_Master_Dataset_${safeTag}_${ts}.csv`);
-
-        await createObjectCsvWriter({ path: filteredPath, header: CSV_HEADER })
-            .writeRecords(leads.length ? leads : allLeads);
-        if (filteredOut > 0) {
-            await createObjectCsvWriter({ path: rawPath, header: CSV_HEADER }).writeRecords(allLeads);
-        }
-
-        updateStats(allLeads.length);
-        // A finished run needs no resuming. If it was stopped early, keep the progress so it can be continued.
-        if (!stopRequested) clearProgress();
-
-        const shown = leads.length ? leads : allLeads;
-        const hot = shown.filter((l) => l.verification === 'Unclaimed').length;
-        const lines = [
-            c.green(c.bold(stopRequested ? `✔ Stopped early, ${firstName()} — results saved` : `✔ Great work, ${firstName()}! Extraction complete`)),
-            '',
-            kv('Leads', c.bold(String(shown.length))),
-        ];
-        if (filteredOut > 0) lines.push(kv('Filtered out', `${filteredOut}  ${c.gray(`(${allLeads.length} found in total)`)}`));
-        lines.push(
-            kv('Hot leads', `${c.bold(String(hot))} ${c.gray('unclaimed businesses')}`),
-            kv('Time taken', formatDuration(Date.now() - startedAt)),
-        );
-        console.log('\n' + box(lines, c.green));
-        console.log('\n  ' + c.gray('Saved in this folder:'));
-        console.log('  ' + c.cyan(path.dirname(filteredPath)));
-        console.log('\n  ' + c.gray('Files:'));
-        console.log('  ' + c.cyan(path.basename(filteredPath)));
-        if (filteredOut > 0) console.log('  ' + c.cyan(path.basename(rawPath)));
-        console.log();
-    } catch (err) {
         live.stop();
-        const advice = explainError(err);
-        const first = String(err.message || err).split('\n')[0]; // skip Playwright's long call logs
-        console.log('\n' + box([c.red(c.bold('✖ Something went wrong')), '', ...(advice || [first])], c.red) + '\n');
-        process.exitCode = 1;
+        if (!stopRequested) {
+            // A finished run needs no resuming. Failed cities stay queued so they can be retried.
+            if (failed.length) persist(failed[0].city, { leads: [], doneQueries: [] });
+            else clearProgress();
+        }
+
+        if (multi) {
+            const total = completed.reduce((s, r) => s + r.leads, 0);
+            const lines = [
+                c.green(c.bold(stopRequested ? `⏹ Stopped early, ${firstName()}` : `✔ All done, ${firstName()}!`)),
+                '',
+                ...completed.map((r) => `${c.green('✔')} ${r.city.padEnd(18)} ${c.bold(String(r.leads))} leads`),
+                ...failed.map((f) => `${c.red('✖')} ${f.city.padEnd(18)} ${c.red('failed')}`),
+                '',
+                kv('Total leads', c.bold(String(total))),
+                kv('Time taken', formatDuration(Date.now() - runStartedAt)),
+            ];
+            if (failed.length || stopRequested) lines.push('', c.gray('Run  mgli  again and choose Resume to continue.'));
+            console.log('\n' + box(lines, failed.length || stopRequested ? c.yellow : c.green) + '\n');
+        }
     } finally {
         live.stop();
-        await scraper.close();
     }
 }
 
